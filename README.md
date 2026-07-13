@@ -70,12 +70,6 @@ Then open **http://localhost:3000** — you'll land on the sign-in page.
 
 ## Notes & limits
 
-- This sandbox that generated the code has no internet access, so the code
-  has been syntax-checked and the field-matching/Excel logic has been
-  unit-tested in isolation, but the full app (including live Google Vision
-  calls) hasn't been run end-to-end. Please run `npm install && npm start`
-  and try it — if something doesn't behave as expected, share the error and
-  I'll fix it.
 - Only one Google Vision API key is needed, in `.env` — it's shared by every
   user of this deployment and never touches the browser.
 - Every page other than sign-in/sign-up requires an authenticated session.
