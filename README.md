@@ -4,6 +4,8 @@ A Web Application where user sign up, upload an Excel sheet, photograph a
 student form/report, let Google Vision OCR read it, review/correct the
 fields, and export back to Excel with the new rows appended.
 
+![Workflow Diagram](screenshot.png)
+
 ## Stack
 
 - **Backend:** Node.js + Express
