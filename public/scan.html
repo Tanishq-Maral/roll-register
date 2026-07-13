@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Scan a form · Roll Register</title>
+<link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <nav class="navbar">
+    <div class="brand"><span class="mark">RR</span> Roll Register</div>
+    <div class="nav-right">
+      <a class="btn btn-small" href="/dashboard.html">Dashboard</a>
+      <button class="btn btn-small" id="logout-btn">Sign out</button>
+    </div>
+  </nav>
+
+  <div class="container">
+    <div class="page-head">
+      <div class="eyebrow" id="sheet-name-label">Sheet</div>
+      <h1>Scan a student form</h1>
+      <p>Take or upload a photo, extract the text, then review each field before saving.</p>
+    </div>
+
+    <div class="card">
+      <div class="field">
+        <label>Photo of the form</label>
+        <div class="source-choice">
+          <button type="button" class="btn btn-primary" id="open-camera-btn">Take photo</button>
+          <label class="btn" for="image-input">Upload photo</label>
+          <input type="file" id="image-input" accept="image/*" capture="environment" style="display:none;" />
+        </div>
+      </div>
+
+      <div class="camera-wrap" id="camera-wrap" style="display:none;">
+        <video id="camera-video" playsinline autoplay muted></video>
+        <div class="camera-controls">
+          <button type="button" class="btn btn-primary" id="capture-btn">Capture</button>
+          <button type="button" class="btn" id="cancel-camera-btn">Cancel</button>
+        </div>
+      </div>
+      <canvas id="camera-canvas" style="display:none;"></canvas>
+
+      <div class="preview-wrap" id="preview-wrap" style="display:none;">
+        <button type="button" class="icon-btn-close" id="remove-photo-btn" aria-label="Remove photo" title="Remove photo">&times;</button>
+        <img id="preview-img" alt="Selected form preview" />
+      </div>
+      <div style="margin-top:14px;">
+        <button class="btn btn-primary" id="extract-btn" style="display:none;">Extract text</button>
+      </div>
+      <div class="error-text" id="extract-error"></div>
+    </div>
+
+    <div id="review-area" style="display:none;">
+      <div class="grid-2" style="align-items:start;">
+        <div>
+          <div class="ticket" id="review-ticket">
+            <span class="stamp" id="match-stamp">0 / 0 matched</span>
+            <h3>Review fields</h3>
+            <p class="hint" style="margin-bottom:16px;">Click a field, then click a line on the right to fill it in.</p>
+            <div id="fields-container"></div>
+            <button class="btn btn-primary btn-block" id="save-record-btn">Save this record</button>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Extracted text</h3>
+          <p class="hint" style="margin-bottom:12px;">Focus a field on the left, then click the matching line here.</p>
+          <div class="raw-lines" id="raw-lines"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" id="saved-summary" style="display:none;">
+      <span class="badge" id="saved-count-badge"></span>
+      <a href="#" id="view-records-link">View saved records for this sheet →</a>
+    </div>
+  </div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/scan.js"></script>
+</body>
+</html>

@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Dashboard · Roll Register</title>
+<link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <nav class="navbar">
+    <div class="brand"><span class="mark">RR</span> Roll Register</div>
+    <div class="nav-right">
+      <span id="user-name"></span>
+      <button class="btn btn-small" id="logout-btn">Sign out</button>
+    </div>
+  </nav>
+
+  <div class="container">
+    <div class="page-head">
+      <div class="eyebrow">Your sheets</div>
+      <h1>Excel sheets</h1>
+      <p>Upload a sheet once — its first row becomes the fields you'll fill in from scans, and everything you scan gets appended below its existing rows on export.</p>
+    </div>
+
+    <div class="card">
+      <form id="upload-form">
+        <div class="grid-2">
+          <div class="field">
+            <label for="sheet-name">Sheet label (optional)</label>
+            <input type="text" id="sheet-name" placeholder="e.g. Grade 6 — Term 2 results" />
+          </div>
+          <div class="field">
+            <label for="sheet-file">Excel file (.xlsx)</label>
+            <input type="file" id="sheet-file" accept=".xlsx,.xls" required />
+          </div>
+        </div>
+        <div class="error-text" id="upload-error"></div>
+        <button type="submit" class="btn btn-primary" id="upload-btn">Upload sheet</button>
+      </form>
+    </div>
+
+    <div id="templates-list"></div>
+  </div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/dashboard.js"></script>
+</body>
+</html>

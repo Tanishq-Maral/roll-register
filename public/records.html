@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Records · Roll Register</title>
+<link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <nav class="navbar">
+    <div class="brand"><span class="mark">RR</span> Roll Register</div>
+    <div class="nav-right">
+      <a class="btn btn-small" href="/dashboard.html">Dashboard</a>
+      <button class="btn btn-small" id="logout-btn">Sign out</button>
+    </div>
+  </nav>
+
+  <div class="container">
+    <div class="page-head">
+      <div class="eyebrow" id="sheet-name-label">Sheet</div>
+      <h1>Saved records</h1>
+      <p>Click any cell to correct it. Export appends these rows below your sheet's existing data.</p>
+    </div>
+
+    <div class="card" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+      <div>
+        <a class="btn btn-primary" id="scan-more-link" href="#">Scan another form</a>
+      </div>
+      <a class="btn" id="export-btn" href="#">Export to Excel</a>
+    </div>
+
+    <div class="card" id="table-card">
+      <div id="table-wrap"></div>
+    </div>
+  </div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/records.js"></script>
+</body>
+</html>
