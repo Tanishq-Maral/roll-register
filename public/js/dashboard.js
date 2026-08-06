@@ -6,6 +6,7 @@
   wireLogout();
 
   await loadTemplates();
+  await loadUsage();
 
   document.getElementById('upload-form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -80,6 +81,25 @@ async function loadTemplates() {
       }
     });
   });
+}
+
+// Shows this deployment's shared Google Vision usage for the current
+// calendar month, out of the app-wide cap that keeps everyone combined
+// under Google's free tier. See lib/quota.js on the server for how the cap
+// is enforced.
+async function loadUsage() {
+  const card = document.getElementById('usage-card');
+  try {
+    const { usage } = await apiFetch('/api/scans/usage');
+    document.getElementById('usage-text').textContent =
+      `${usage.count} / ${usage.limit} scans used · ${usage.remaining} left this month`;
+    const stamp = document.getElementById('usage-stamp');
+    stamp.textContent = usage.remaining > 0 ? 'Available' : 'Limit reached';
+    stamp.style.color = usage.remaining > 0 ? 'var(--verified)' : 'var(--red-pen)';
+    card.style.display = 'block';
+  } catch (err) {
+    // Non-critical - just skip showing the widget if this fails.
+  }
 }
 
 function escapeHtml(str) {

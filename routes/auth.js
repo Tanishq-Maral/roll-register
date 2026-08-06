@@ -2,10 +2,11 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
-const db = require('../db/db');
+const { db } = require('../lib/firebaseAdmin');
 const { requireAuth } = require('../middleware/auth');
 
 const router = express.Router();
+const users = db.collection('users');
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -30,45 +31,67 @@ function setAuthCookie(res, token) {
   });
 }
 
-router.post('/register', loginLimiter, (req, res) => {
-  const { name, email, password } = req.body || {};
-  if (!name || !email || !password) {
-    return res.status(400).json({ error: 'Name, email, and password are all required.' });
-  }
-  if (password.length < 8) {
-    return res.status(400).json({ error: 'Password must be at least 8 characters.' });
-  }
+router.post('/register', loginLimiter, async (req, res, next) => {
+  try {
+    const { name, email, password } = req.body || {};
+    if (!name || !email || !password) {
+      return res.status(400).json({ error: 'Name, email, and password are all required.' });
+    }
+    if (password.length < 8) {
+      return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+    }
 
-  const normalizedEmail = String(email).toLowerCase().trim();
-  const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(normalizedEmail);
-  if (existing) {
-    return res.status(409).json({ error: 'An account with that email already exists.' });
+    const normalizedEmail = String(email).toLowerCase().trim();
+    const existingSnap = await users.where('email', '==', normalizedEmail).limit(1).get();
+    if (!existingSnap.empty) {
+      return res.status(409).json({ error: 'An account with that email already exists.' });
+    }
+
+    const hash = bcrypt.hashSync(password, 10);
+    const trimmedName = String(name).trim();
+    const docRef = await users.add({
+      name: trimmedName,
+      email: normalizedEmail,
+      passwordHash: hash,
+      createdAt: new Date().toISOString(),
+    });
+
+    const user = { id: docRef.id, email: normalizedEmail, name: trimmedName };
+    setAuthCookie(res, signToken(user));
+    res.json({ user });
+  } catch (err) {
+    next(err);
   }
-
-  const hash = bcrypt.hashSync(password, 10);
-  const info = db
-    .prepare('INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)')
-    .run(String(name).trim(), normalizedEmail, hash);
-
-  const user = { id: info.lastInsertRowid, email: normalizedEmail, name: String(name).trim() };
-  setAuthCookie(res, signToken(user));
-  res.json({ user });
 });
 
-router.post('/login', loginLimiter, (req, res) => {
-  const { email, password } = req.body || {};
-  if (!email || !password) {
-    return res.status(400).json({ error: 'Email and password are required.' });
-  }
+router.post('/login', loginLimiter, async (req, res, next) => {
+  try {
+    const { email, password } = req.body || {};
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password are required.' });
+    }
 
-  const row = db.prepare('SELECT * FROM users WHERE email = ?').get(String(email).toLowerCase().trim());
-  if (!row || !bcrypt.compareSync(password, row.password_hash)) {
-    return res.status(401).json({ error: 'Incorrect email or password.' });
-  }
+    const snap = await users
+      .where('email', '==', String(email).toLowerCase().trim())
+      .limit(1)
+      .get();
 
-  const user = { id: row.id, email: row.email, name: row.name };
-  setAuthCookie(res, signToken(user));
-  res.json({ user });
+    if (snap.empty) {
+      return res.status(401).json({ error: 'Incorrect email or password.' });
+    }
+
+    const doc = snap.docs[0];
+    const data = doc.data();
+    if (!bcrypt.compareSync(password, data.passwordHash)) {
+      return res.status(401).json({ error: 'Incorrect email or password.' });
+    }
+
+    const user = { id: doc.id, email: data.email, name: data.name };
+    setAuthCookie(res, signToken(user));
+    res.json({ user });
+  } catch (err) {
+    next(err);
+  }
 });
 
 router.post('/logout', (req, res) => {
@@ -76,10 +99,15 @@ router.post('/logout', (req, res) => {
   res.json({ ok: true });
 });
 
-router.get('/me', requireAuth, (req, res) => {
-  const row = db.prepare('SELECT id, name, email FROM users WHERE id = ?').get(req.user.id);
-  if (!row) return res.status(404).json({ error: 'User not found.' });
-  res.json({ user: { id: row.id, name: row.name, email: row.email } });
+router.get('/me', requireAuth, async (req, res, next) => {
+  try {
+    const doc = await users.doc(req.user.id).get();
+    if (!doc.exists) return res.status(404).json({ error: 'User not found.' });
+    const data = doc.data();
+    res.json({ user: { id: doc.id, name: data.name, email: data.email } });
+  } catch (err) {
+    next(err);
+  }
 });
 
 module.exports = router;

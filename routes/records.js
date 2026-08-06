@@ -1,62 +1,91 @@
 const express = require('express');
-const db = require('../db/db');
+const { db } = require('../lib/firebaseAdmin');
 const { requireAuth } = require('../middleware/auth');
 
 const router = express.Router();
+const templates = db.collection('templates');
+const records = db.collection('records');
+
 router.use(requireAuth);
 
-router.post('/', (req, res) => {
-  const { templateId, data } = req.body || {};
-  if (!templateId || !data) return res.status(400).json({ error: 'templateId and data are required.' });
+router.post('/', async (req, res, next) => {
+  try {
+    const { templateId, data } = req.body || {};
+    if (!templateId || !data) return res.status(400).json({ error: 'templateId and data are required.' });
 
-  const template = db.prepare('SELECT id FROM templates WHERE id = ? AND user_id = ?').get(templateId, req.user.id);
-  if (!template) return res.status(404).json({ error: 'Sheet not found.' });
+    const templateDoc = await templates.doc(templateId).get();
+    if (!templateDoc.exists || templateDoc.data().userId !== req.user.id) {
+      return res.status(404).json({ error: 'Sheet not found.' });
+    }
 
-  const info = db
-    .prepare('INSERT INTO records (template_id, user_id, data_json) VALUES (?, ?, ?)')
-    .run(templateId, req.user.id, JSON.stringify(data));
+    const now = new Date().toISOString();
+    const docRef = await records.add({
+      templateId,
+      userId: req.user.id,
+      dataJson: JSON.stringify(data),
+      createdAt: now,
+      updatedAt: now,
+    });
 
-  res.json({ record: { id: info.lastInsertRowid, templateId: Number(templateId), data } });
+    res.json({ record: { id: docRef.id, templateId, data } });
+  } catch (err) {
+    next(err);
+  }
 });
 
-router.get('/', (req, res) => {
-  const { templateId } = req.query;
-  if (!templateId) return res.status(400).json({ error: 'templateId query param is required.' });
+router.get('/', async (req, res, next) => {
+  try {
+    const { templateId } = req.query;
+    if (!templateId) return res.status(400).json({ error: 'templateId query param is required.' });
 
-  const rows = db
-    .prepare(
-      'SELECT id, data_json, created_at, updated_at FROM records WHERE template_id = ? AND user_id = ? ORDER BY created_at ASC'
-    )
-    .all(templateId, req.user.id);
+    const snap = await records
+      .where('templateId', '==', templateId)
+      .where('userId', '==', req.user.id)
+      .get();
 
-  res.json({
-    records: rows.map((r) => ({
-      id: r.id,
-      data: JSON.parse(r.data_json),
-      createdAt: r.created_at,
-      updatedAt: r.updated_at,
-    })),
-  });
+    const list = snap.docs
+      .map((d) => {
+        const r = d.data();
+        return { id: d.id, data: JSON.parse(r.dataJson), createdAt: r.createdAt, updatedAt: r.updatedAt };
+      })
+      .sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
+
+    res.json({ records: list });
+  } catch (err) {
+    next(err);
+  }
 });
 
-router.put('/:id', (req, res) => {
-  const { data } = req.body || {};
-  if (!data) return res.status(400).json({ error: 'data is required.' });
+router.put('/:id', async (req, res, next) => {
+  try {
+    const { data } = req.body || {};
+    if (!data) return res.status(400).json({ error: 'data is required.' });
 
-  const row = db.prepare('SELECT id FROM records WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
-  if (!row) return res.status(404).json({ error: 'Record not found.' });
+    const ref = records.doc(req.params.id);
+    const doc = await ref.get();
+    if (!doc.exists || doc.data().userId !== req.user.id) {
+      return res.status(404).json({ error: 'Record not found.' });
+    }
 
-  db.prepare("UPDATE records SET data_json = ?, updated_at = datetime('now') WHERE id = ?").run(
-    JSON.stringify(data),
-    req.params.id
-  );
-  res.json({ ok: true });
+    await ref.update({ dataJson: JSON.stringify(data), updatedAt: new Date().toISOString() });
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
 });
 
-router.delete('/:id', (req, res) => {
-  const info = db.prepare('DELETE FROM records WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
-  if (!info.changes) return res.status(404).json({ error: 'Record not found.' });
-  res.json({ ok: true });
+router.delete('/:id', async (req, res, next) => {
+  try {
+    const ref = records.doc(req.params.id);
+    const doc = await ref.get();
+    if (!doc.exists || doc.data().userId !== req.user.id) {
+      return res.status(404).json({ error: 'Record not found.' });
+    }
+    await ref.delete();
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
 });
 
 module.exports = router;

@@ -68,7 +68,17 @@ app.use((err, req, res, next) => {
   res.status(err.status || 500).json({ error: err.message || 'Something went wrong on the server.' });
 });
 
+// Only bind to a port when this file is run directly (`npm start` /
+// `npm run dev` locally). On Vercel, this file is imported as a serverless
+// function handler instead - `app` itself is a request-handling function,
+// so exporting it is enough; calling app.listen() there would be wrong
+// (and is never reached, since Vercel imports rather than executes this
+// file as a script).
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Student OCR -> Excel app running at http://localhost:${PORT}`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Roll Register app running at http://localhost:${PORT}`);
+  });
+}
+
+module.exports = app;
