@@ -8,6 +8,19 @@ const router = express.Router();
 const templates = db.collection('templates');
 const records = db.collection('records');
 
+function decodeUploadedName(name) {
+  const value = String(name || '');
+  if (!/[ÃÂÐÑà-ÿ]/.test(value)) return value;
+
+  try {
+    const decoded = Buffer.from(value, 'latin1').toString('utf8');
+    if (/\p{Script=Devanagari}/u.test(decoded)) return decoded;
+  } catch (err) {
+    // Keep the original filename if it cannot be safely decoded.
+  }
+  return value;
+}
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
@@ -43,7 +56,8 @@ router.post('/', upload.single('file'), async (req, res, next) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded.' });
 
-    const name = ((req.body && req.body.name) || req.file.originalname || 'Untitled sheet').trim();
+    const uploadedName = decodeUploadedName(req.file.originalname);
+    const name = ((req.body && req.body.name) || uploadedName || 'Untitled sheet').trim();
 
     let parsed;
     try {
@@ -95,7 +109,7 @@ router.get('/', async (req, res, next) => {
         const r = d.data();
         return {
           id: d.id,
-          name: r.name,
+          name: decodeUploadedName(r.name),
           sheetName: r.sheetName,
           headers: r.headers,
           existingRowCount: JSON.parse(r.existingRowsJson || '[]').length,
@@ -120,7 +134,7 @@ router.get('/:id', async (req, res, next) => {
     res.json({
       template: {
         id: doc.id,
-        name: r.name,
+        name: decodeUploadedName(r.name),
         sheetName: r.sheetName,
         headers: r.headers,
         existingRowCount: JSON.parse(r.existingRowsJson || '[]').length,

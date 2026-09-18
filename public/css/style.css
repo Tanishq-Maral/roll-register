@@ -306,12 +306,25 @@ input:focus, textarea:focus, select:focus {
   color: var(--ink-soft);
 }
 
-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+#table-wrap {
+  max-width: 100%;
+  max-height: min(65vh, 680px);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
 th, td {
   text-align: left;
   padding: 10px 12px;
   border-bottom: 1px solid var(--line);
   font-family: var(--font-mono);
+  white-space: nowrap;
 }
 th { font-family: var(--font-body); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-soft); }
 td[contenteditable="true"] { cursor: text; }

@@ -31,8 +31,11 @@
 // preceding letter and must not be removed before matching.
 function normalizeToken(str) {
   return String(str || '')
+    .normalize('NFC')
     .toLowerCase()
-    .replace(/[^\p{L}\p{M}\p{N}]/gu, '');
+    .replace(/[\u200c\u200d\ufeff]/g, '')
+    .replace(/[^\p{L}\p{M}\p{N}]/gu, '')
+    .replace(/इयत्ता/g, 'इयता');
 }
 
 function tokenizeHeader(header) {
