@@ -9,10 +9,11 @@
 //
 // Given that, there is no need to guess which word means what: we rebuild
 // the lines of the document from each word's bounding box, walk through
-// them in reading order, and for each header (in order) take everything
-// between the end of its label and the start of the next header's label as
-// its value. If a header's label is immediately followed by the next
-// header's label (i.e. no value in between), the value is left blank.
+// them in reading order, and try every Excel header in serialized order.
+// Each field takes everything between the end of its label and the start of
+// the next successfully matched label. If a label has no value, the next
+// header is still searched from the same reading-order cursor, so blank or
+// missing fields never prevent later fields from being extracted.
 //
 // OCR is imperfect, though, so two failure modes are handled explicitly:
 //   - A label may be misspelled by the OCR engine (a dropped/added/swapped
@@ -24,16 +25,14 @@
 //     extracted header is still matched and filled in properly; a missing
 //     label in the middle does not break the rest of the sequence.
 
-// Strips punctuation/whitespace while keeping the token's actual letters
-// and digits, in ANY script/language - not just a-z0-9. This must be
-// Unicode-aware: a plain a-z0-9 filter would silently reduce every
-// Devanagari, Arabic, CJK, etc. token to an empty string, since none of
-// those characters fall in that ASCII range, which breaks matching
-// entirely for non-Latin-script labels.
+// Strips punctuation/whitespace while keeping letters, combining marks, and
+// digits in ANY script/language. Combining marks are essential for scripts
+// such as Devanagari: Marathi vowel signs are Unicode marks attached to the
+// preceding letter and must not be removed before matching.
 function normalizeToken(str) {
   return String(str || '')
     .toLowerCase()
-    .replace(/[^\p{L}\p{N}]/gu, '');
+    .replace(/[^\p{L}\p{M}\p{N}]/gu, '');
 }
 
 function tokenizeHeader(header) {
@@ -154,19 +153,32 @@ function flattenTokens(lines) {
 }
 
 // Find the first place, at or after `fromIdx`, where `headerTokens` occurs
-// as a contiguous run inside `tokens`. Returns { start, end } (end exclusive)
-// or null if no such run exists.
+// inside `tokens`. Punctuation-only OCR tokens are ignored for matching,
+// because Vision may return `Date / Time` as `Date`, `/`, `Time` while the
+// header normalizes to the two meaningful tokens `Date`, `Time`. The returned
+// indexes still refer to the original token array so values and displayed
+// lines retain their original text.
 function findLabelMatch(tokens, headerTokens, fromIdx) {
   if (!headerTokens.length) return null;
-  for (let i = fromIdx; i <= tokens.length - headerTokens.length; i++) {
+  const searchableTokens = tokens
+    .map((token, index) => ({ token, index }))
+    .filter(({ token }) => token.norm);
+
+  for (let i = 0; i <= searchableTokens.length - headerTokens.length; i++) {
+    if (searchableTokens[i].index < fromIdx) continue;
     let ok = true;
     for (let j = 0; j < headerTokens.length; j++) {
-      if (!tokensMatch(headerTokens[j], tokens[i + j].norm)) {
+      if (!tokensMatch(headerTokens[j], searchableTokens[i + j].token.norm)) {
         ok = false;
         break;
       }
     }
-    if (ok) return { start: i, end: i + headerTokens.length };
+    if (ok) {
+      const start = searchableTokens[i].index;
+      let end = searchableTokens[i + headerTokens.length - 1].index + 1;
+      while (end < tokens.length && !tokens[end].norm) end++;
+      return { start, end };
+    }
   }
   return null;
 }
@@ -182,9 +194,10 @@ function mapWordsToHeaders(words, headers) {
   const lines = buildLines(words);
   const tokens = flattenTokens(lines);
 
-  // Step 1: locate each header's label in the token stream, in order.
-  // Searching always resumes from where the previous *found* label ended,
-  // which is what enforces "headers and labels appear in the same order".
+  // Step 1: locate every header label in the Excel/serialized order.
+  // A missing label does not move searchFrom. This is important: the next
+  // header must still be searched after the last label that was actually
+  // found, rather than after an assumed value for the missing field.
   const matches = [];
   let searchFrom = 0;
   for (const header of headers) {
@@ -210,15 +223,10 @@ function mapWordsToHeaders(words, headers) {
       return;
     }
 
-    let nextStart = tokens.length;
-    for (let j = i + 1; j < matches.length; j++) {
-      if (matches[j].start !== -1) {
-        nextStart = matches[j].start;
-        break;
-      }
-    }
+    const nextMatch = matches.slice(i + 1).find((candidate) => candidate.start !== -1);
+    const nextStart = nextMatch ? nextMatch.start : tokens.length;
 
-    const valueTokens = tokens.slice(m.end, Math.max(nextStart, m.end));
+    const valueTokens = tokens.slice(m.end, Math.max(m.end, nextStart));
     mapped[m.header] = valueTokens
       .map((t) => t.text)
       .join(' ')

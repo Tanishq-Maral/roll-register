@@ -81,8 +81,8 @@ router.post(
       }
 
       const headers = templateDoc.data().headers;
-      const { mapped, lines } = mapWordsToHeaders(allWords, headers);
-      res.json({ rawText: rawTexts.join('\n'), lines, mapped, usage: { count: usage.count, limit: usage.limit } });
+      const mapping = mapWordsToHeaders(allWords, headers);
+      res.json({ rawText: rawTexts.join('\n'), lines: mapping.lines, mapped: mapping.mapped, usage: { count: usage.count, limit: usage.limit } });
     } catch (err) {
       res.status(502).json({ error: err.message || 'Text extraction failed.' });
     }
