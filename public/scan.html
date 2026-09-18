@@ -27,8 +27,8 @@
         <label>Photo of the form</label>
         <div class="source-choice">
           <button type="button" class="btn btn-primary" id="open-camera-btn">Take photo</button>
-          <label class="btn" for="image-input">Upload photo</label>
-          <input type="file" id="image-input" accept="image/*" capture="environment" style="display:none;" />
+          <label class="btn" for="image-input">Upload photos</label>
+          <input type="file" id="image-input" accept="image/*" capture="environment" multiple style="display:none;" />
         </div>
       </div>
 
@@ -42,8 +42,8 @@
       <canvas id="camera-canvas" style="display:none;"></canvas>
 
       <div class="preview-wrap" id="preview-wrap" style="display:none;">
-        <button type="button" class="icon-btn-close" id="remove-photo-btn" aria-label="Remove photo" title="Remove photo">&times;</button>
-        <img id="preview-img" alt="Selected form preview" />
+        <button type="button" class="icon-btn-close" id="remove-photo-btn" aria-label="Remove photos" title="Remove photos">&times;</button>
+        <div class="preview-grid" id="preview-grid"></div>
       </div>
       <div style="margin-top:14px;">
         <button class="btn btn-primary" id="extract-btn" style="display:none;">Extract text</button>

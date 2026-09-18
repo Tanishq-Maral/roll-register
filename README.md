@@ -1,192 +1,345 @@
-# Roll Register — scan student forms into Excel
+# Student OCR Excel App
 
-A web app where a user signs up, uploads an Excel sheet, photographs a
-student form/report, lets Google Vision OCR read it, reviews/corrects the
-fields, and exports back to Excel with the new rows appended.
+A web application for converting student forms into structured spreadsheet rows. A user uploads an existing Excel sheet, uses a camera or image upload to capture student forms, extracts text with Google Cloud Vision, reviews or corrects the detected fields, saves records, and downloads an Excel export containing the original rows plus the new records.
 
-## Stack
+## Contents
 
-- **Backend:** Node.js + Express
-- **Database:** Firebase Firestore — chosen specifically so this app can run
-  on Vercel: Vercel's serverless functions get a fresh, read-only filesystem
-  on every request, so a file database (like SQLite) can't persist data
-  there. Firestore is a normal network database, so it works identically
-  locally and on Vercel.
-- **Auth:** email + password, bcrypt-hashed, JWT stored in an httpOnly cookie
-- **OCR:** Google Cloud Vision API, called from the server using a single key
-  set in an env var (never touches the browser or any individual user's
-  account) — see **"Staying on the free tier"** below for how usage is capped
-- **Excel:** `xlsx` (SheetJS) — reads your uploaded sheet's header row and
-  existing rows, and rebuilds them on export
-- **Frontend:** plain HTML/CSS/JS (no build step)
+- [Product workflow](#product-workflow)
+- [Architecture](#architecture)
+- [Technology choices](#technology-choices)
+- [Application workflow](#application-workflow)
+- [OCR and field matching](#ocr-and-field-matching)
+- [Excel processing](#excel-processing)
+- [API reference](#api-reference)
+- [Data model](#data-model)
+- [Security and limits](#security-and-limits)
+- [Project structure](#project-structure)
+- [Local setup](#local-setup)
+- [Vercel deployment](#vercel-deployment)
+- [Known limitations and legacy files](#known-limitations-and-legacy-files)
 
-## 1. Set up Firestore
+## Product workflow
 
-1. Go to https://console.firebase.google.com and create a project (or reuse
-   an existing one).
-2. Open **Build → Firestore Database → Create database**, and start it in
-   **Native mode** (any region is fine).
-3. Go to **Project settings (gear icon) → Service accounts → Generate new
-   private key**. This downloads a JSON file — keep it private, it's a
-   credential. You'll need three values out of it in the next step:
-   `project_id`, `client_email`, and `private_key`.
+1. Register or sign in.
+2. Upload an `.xlsx` or `.xls` workbook.
+3. The first worksheet's first row becomes the list of fields to fill.
+4. Open the sheet's scan page and capture or upload a student form image.
+5. The server sends the image to Google Cloud Vision and matches OCR text to the sheet headers.
+6. Review the automatic values, choose extracted lines for manual assignment, or type corrections.
+7. Save the reviewed student record.
+8. Edit or delete saved records from the records page.
+9. Export the sheet as a new `.xlsx` file containing the original rows followed by saved records.
 
-## 2. Get a Google Vision API key
+## Architecture
 
-1. Create/select a project at https://console.cloud.google.com
-2. Enable the **Cloud Vision API**.
-3. Create an API key under **APIs & Services → Credentials**.
-4. (Recommended) restrict the key to the Vision API only.
+The application is a single CommonJS Node.js process with an Express HTTP layer and a static, no-build-step browser frontend.
 
-This one key is shared by every user of your deployment — it's an app-level
-setting, not something each person enters themselves.
-
-## 3. Configure environment variables
-
-```bash
-cd roll-register
-npm install
-cp .env.example .env
+```text
+Browser
+  |
+  | HTML pages and fetch requests with httpOnly JWT cookie
+  v
+Express app (server.js)
+  |-- pageAuthGuard -> protected HTML pages
+  |-- /api/auth      -> registration, login, logout, current user
+  |-- /api/templates -> Excel upload, sheet metadata, delete, export
+  |-- /api/scans    -> OCR quota, image OCR, field mapping
+  |-- /api/records  -> create, list, edit, delete records
+  |-- public/       -> static HTML, CSS, and browser JavaScript
+  |
+  |-- Firebase Admin SDK -> Firestore
+  |-- Google Cloud Vision API -> document text detection
+  |-- xlsx -> in-memory workbook parsing and export
 ```
 
-Open `.env` and fill in:
-- `JWT_SECRET` — a long random string, e.g.
-  ```bash
-  node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
-  ```
-- `GOOGLE_VISION_API_KEY` — from step 2.
-- `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY` —
-  from the service account JSON in step 1. Keep the `\n` escapes in the
-  private key as-is in the `.env` file; the app converts them to real
-  newlines itself.
-- `MONTHLY_OCR_LIMIT` — see below. Defaults to `500`.
+### Request lifecycle
 
-## 4. Run it locally
+1. `server.js` loads environment variables and validates the required JWT and Vision settings at startup.
+2. Helmet, cookie parsing, JSON parsing, and URL-encoded body parsing are installed.
+3. `pageAuthGuard` protects `dashboard.html`, `scan.html`, and `records.html` before those files are served.
+4. API routers independently run `middleware/auth.js`, so API access cannot bypass the page guard.
+5. Routes read and write Firestore through `lib/firebaseAdmin.js`.
+6. Uploads use Multer memory storage. Images and workbooks are processed in memory and are not persisted to disk.
+7. The final Express error handler converts unexpected failures into JSON error responses.
 
-```bash
-npm start
+The same Express app is exported by `api/index.js`. Locally, `server.js` calls `app.listen()`; on Vercel, the platform imports the app as a serverless request handler.
+
+## Technology choices
+
+| Technology | Use | Why it is used |
+| --- | --- | --- |
+| Node.js 18+ | Server runtime | Provides the JavaScript runtime and built-in `fetch` used by the Vision integration. |
+| Express | HTTP server and routing | Keeps page serving, API routing, middleware, and error handling in one small server. |
+| Plain HTML, CSS, and browser JavaScript | Frontend | No bundler or build pipeline is required, which keeps local and Vercel deployment simple. |
+| Firebase Admin SDK and Firestore | Persistence | A network database works with Vercel's serverless filesystem, which is not a durable application database. |
+| JSON Web Tokens and cookies | Sessions | A signed, stateless session can be checked by both page and API requests. |
+| bcryptjs | Password hashing | Passwords are stored as bcrypt hashes rather than plaintext. |
+| Google Cloud Vision | OCR | Provides document text detection plus word bounding boxes needed for label-to-value matching. |
+| `xlsx` (SheetJS) | Excel parsing and export | Reads the first worksheet and produces a downloadable workbook without a separate spreadsheet service. |
+| Multer | Multipart uploads | Handles image and workbook uploads with memory storage and a 10 MB file limit. |
+| Helmet | HTTP security headers | Adds common browser security headers at the Express boundary. |
+| express-rate-limit | Auth abuse protection | Limits registration and login attempts by IP address. |
+
+## Application workflow
+
+### Authentication
+
+The login and registration pages call `/api/auth`. Successful registration or login creates a JWT containing the user identity and sets it in an httpOnly cookie named `token`. The cookie lasts seven days, uses `SameSite=Lax`, and is marked `secure` when `NODE_ENV=production`.
+
+`middleware/auth.js` verifies the cookie on protected API routes and attaches the authenticated user to `req.user`. The frontend also calls `/api/auth/me` and redirects to the login page if a session expires.
+
+### Template upload
+
+`POST /api/templates` accepts a multipart field named `file` and an optional `name`. `utils/excel.js` reads only the first worksheet:
+
+- Row 1 becomes the trimmed, non-empty header list.
+- Remaining rows are retained as existing data.
+- The parsed sheet name and original filename are stored as metadata.
+- Existing rows are serialized as JSON because Firestore does not support the required nested array shape directly.
+
+A template is the reusable definition of a sheet and its fields. It is not the original workbook file; the workbook is parsed and then discarded.
+
+### Scan and review
+
+The scan page loads a user's template, captures an image with `getUserMedia` or accepts an image upload, and sends it to `/api/scans/extract`.
+
+Before upload, the browser resizes the image to a maximum dimension of 1800 pixels and JPEG quality `0.85`. The server validates that the file is an image, checks template ownership, reserves one shared OCR quota unit, calls Vision, and maps the response to the template headers.
+
+The response contains:
+
+- `rawText`: flat text returned by Vision.
+- `lines`: OCR text grouped into lines for manual selection.
+- `mapped`: values automatically assigned to headers.
+- `usage`: current count and configured limit.
+
+The user can accept, edit, or replace every mapped value before saving it as a record.
+
+### Records and export
+
+Saved records belong to both the authenticated user and the template. The records page renders them in header order, saves inline edits on blur, and supports deletion.
+
+Export creates a fresh workbook containing:
+
+1. The stored headers.
+2. The original rows from the uploaded sheet.
+3. Saved records ordered by creation time and projected into header order.
+
+Exports are always `.xlsx` files. They preserve row data, but not the original workbook's formatting, formulas, column widths, additional worksheets, or other workbook metadata.
+
+## OCR and field matching
+
+`utils/ocr.js` calls Google Cloud Vision's `DOCUMENT_TEXT_DETECTION` endpoint using the server-side `GOOGLE_VISION_API_KEY`. It extracts each detected word and its bounding box, then returns both structured words and flat text.
+
+`utils/fieldMatcher.js` performs the application-specific mapping:
+
+1. Words are grouped into lines using their vertical center and sorted left to right.
+2. Header and OCR tokens are normalized using Unicode-aware letters and digits.
+3. Headers are matched as ordered contiguous token sequences.
+4. Matching uses Damerau-Levenshtein tolerance. Tokens of length 3 or less must match exactly; lengths 4-6 allow one edit; longer tokens allow two edits.
+5. A matched field's value is the text after its label and before the next successfully matched header.
+6. Missing headers remain blank, and later headers can still be matched.
+
+This approach is designed for forms whose labels correspond to the uploaded sheet's header row. It is not a general-purpose document understanding model.
+
+## Excel processing
+
+`utils/excel.js` reads only the first worksheet. The first row becomes the headers and all later rows are retained. Blank header cells are removed and header text is trimmed.
+
+For export, `buildWorkbook()` creates a new workbook from the stored headers, original rows, and saved records. Each record is projected into the same header order, with missing fields exported as empty strings. The output format is always `.xlsx`, even when the input was `.xls`.
+
+## API reference
+
+All template, scan, and record endpoints require the `token` cookie. Authentication endpoints are public except `/api/auth/me`.
+
+### Authentication endpoints
+
+| Method | Endpoint | Input | Result |
+| --- | --- | --- | --- |
+| `POST` | `/api/auth/register` | JSON: `name`, `email`, `password`; password must be at least 8 characters | Creates a user, sets the session cookie, returns `user`. |
+| `POST` | `/api/auth/login` | JSON: `email`, `password` | Verifies credentials, sets the session cookie, returns `user`. |
+| `POST` | `/api/auth/logout` | None | Clears the session cookie and returns `{ ok: true }`. |
+| `GET` | `/api/auth/me` | Session cookie | Returns the current user. |
+
+### Template endpoints
+
+| Method | Endpoint | Input | Result |
+| --- | --- | --- | --- |
+| `POST` | `/api/templates` | Multipart `file` and optional `name`; max 10 MB; `.xlsx` or `.xls` | Parses the first worksheet and creates a template. |
+| `GET` | `/api/templates` | None | Lists the current user's templates, newest first. |
+| `GET` | `/api/templates/:id` | Template ID | Returns owned template metadata. |
+| `DELETE` | `/api/templates/:id` | Template ID | Deletes the template and its records. |
+| `GET` | `/api/templates/:id/export` | Template ID | Downloads a rebuilt `.xlsx` workbook. |
+
+### Scan endpoints
+
+| Method | Endpoint | Input | Result |
+| --- | --- | --- | --- |
+| `GET` | `/api/scans/usage` | None | Returns the current UTC month, shared count, limit, and remaining quota. |
+| `POST` | `/api/scans/extract` | Multipart image field `image` and form field `templateId`; max 10 MB | Reserves quota, runs OCR, maps fields, and returns OCR text, lines, mapped data, and usage. |
+
+### Record endpoints
+
+| Method | Endpoint | Input | Result |
+| --- | --- | --- | --- |
+| `POST` | `/api/records` | JSON: `templateId`, `data` | Creates a reviewed record after checking template ownership. |
+| `GET` | `/api/records?templateId=:id` | Template ID query parameter | Lists owned records oldest first. |
+| `PUT` | `/api/records/:id` | JSON: `data` | Updates an owned record. |
+| `DELETE` | `/api/records/:id` | Record ID | Deletes an owned record. |
+
+Errors use JSON in the form `{ "error": "message" }`. An image upload that reaches Vision but fails there returns HTTP 502; an exhausted shared quota returns HTTP 429.
+
+## Data model
+
+The active application database is Firestore:
+
+```text
+users/{userId}
+  name, email, passwordHash, createdAt
+
+templates/{templateId}
+  userId, name, originalFilename, sheetName, headers,
+  existingRowsJson, createdAt
+
+records/{recordId}
+  templateId, userId, dataJson, createdAt, updatedAt
+
+usage/{YYYY-MM}
+  count, updatedAt
 ```
 
-Then open **http://localhost:3000** — you'll land on the sign-in page.
+Ownership is checked in route handlers, not only in the UI:
 
-## 5. Deploy to Vercel
+- Template reads, scans, exports, and deletion require `template.userId === req.user.id`.
+- Records are created with the authenticated user's ID.
+- Record lists query both `templateId` and `userId`.
+- Record updates and deletion require a matching `userId`.
+- Template deletion explicitly deletes related records because Firestore has no relational cascade delete.
 
-This repo already includes a `vercel.json`, so deployment is just:
+The `usage/{YYYY-MM}` document is shared by the deployment. A Firestore transaction reserves a count before each Vision call, so simultaneous users cannot reserve more than the configured monthly limit. A failed Vision call does not refund its reservation.
 
-```bash
-npm install -g vercel   # if you don't have it
-vercel
-```
+## Security and limits
 
-or connect the repo in the Vercel dashboard (**New Project → Import**). Either
-way, before the first deploy (or right after, then redeploy), add the same
-variables from your `.env` as **Environment Variables** in the Vercel project
-settings: `JWT_SECRET`, `GOOGLE_VISION_API_KEY`, `FIREBASE_PROJECT_ID`,
-`FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`, `MONTHLY_OCR_LIMIT`, and set
-`NODE_ENV=production`. For `FIREBASE_PRIVATE_KEY`, paste it into Vercel's
-value field with the `\n` escapes intact, same as in `.env`.
+- `JWT_SECRET` and the Vision API key are required at startup.
+- Passwords use bcrypt with cost factor 10.
+- JWT sessions expire after seven days and use httpOnly cookies.
+- Production cookies use the `secure` flag.
+- Helmet is enabled, with CSP disabled in the current server configuration.
+- Login and registration share an IP-based limit of 20 attempts per 15 minutes.
+- Image and workbook uploads are limited to 10 MB.
+- JSON request bodies are limited to 2 MB.
+- The shared monthly OCR cap defaults to 500 calls and is configured with `MONTHLY_OCR_LIMIT`.
+- Uploaded files are held in memory and are not written to the local `uploads/` directory.
+- `getUserMedia` requires a secure context; use HTTPS in deployed environments.
 
-Camera capture (`getUserMedia`) needs a secure context — Vercel serves
-everything over HTTPS by default, so this works out of the box once deployed.
-
-## Staying on the free tier (the 500-scan cap)
-
-Google Cloud Vision's free tier is **1,000 requests/month**, and this app
-enforces a shared, app-wide cap of **500 requests/month by default** — half
-the free allowance — so normal use shouldn't come close to being billed, even
-with several users combined.
-
-How it works:
-
-- Every scan ("Extract text") is one Vision API call. Regardless of which
-  user makes it, that call is counted against **one shared monthly counter**
-  stored in Firestore (`usage/{YYYY-MM}`), not a per-user counter.
-- Before each call, the server reserves one unit of that counter inside a
-  Firestore transaction. If the cap has already been reached, the request is
-  rejected with a clear message and **the Vision API is never called** — so
-  it's not possible to exceed the cap, even if multiple users scan at the
-  same instant (see `lib/quota.js` for exactly how the transaction prevents
-  that race condition).
-- The counter resets automatically on the 1st of each month (it's keyed by
-  calendar month, so a new month just starts a fresh counter — no cron job
-  needed).
-- The current month's usage is shown on the dashboard ("Shared OCR quota this
-  month"), and is also available at `GET /api/scans/usage`.
-- The limit is one env var: `MONTHLY_OCR_LIMIT` (default `500`). Raise it if
-  you want to use more of the 1,000 free requests, but leave some margin —
-  Google's console can take a little time to reflect same-day usage, so a
-  cap set exactly at 1,000 risks a slow response there costing you a charge.
-
-## 6. Using the app
-
-1. **Create an account** (or sign in, if you already have one) — every page
-   except the sign-in/sign-up screens requires an active session.
-2. **Upload a sheet:** pick an existing `.xlsx` file. Its first row is read as
-   the field names to fill (e.g. `Name`, `Roll No`, `Class`, `Marks`); any
-   rows already in the sheet are kept and will reappear in your export.
-3. **Scan a form:** on a sheet's "Scan a form" page, take a photo with your
-   camera or upload one. Click **Extract text**. Matched fields are filled in
-   automatically: the header text from your sheet is located verbatim in the
-   scanned image (tolerating small OCR misreads), and everything between one
-   label and the next becomes that field's value — see
-   `utils/fieldMatcher.js`.
-4. **Review:** anything not auto-matched is left blank. Click a field, then
-   click the matching line in the "Extracted text" panel to fill it in one
-   click, or just type the correction directly.
-5. **Save this record**, then scan the next form — repeat for a whole batch.
-6. **View saved records** for a sheet: edit any cell inline, delete rows you
-   don't want, and hit **Export to Excel** to download the original sheet
-   with your new rows appended.
-
-## Notes & limits
-
-- Only one Google Vision API key is needed, shared by every user of this
-  deployment and never sent to the browser.
-- Every page other than sign-in/sign-up requires an authenticated session.
-  This is enforced in three places: the server refuses to even serve
-  `dashboard.html`/`scan.html`/`records.html` without a valid session cookie
-  (`server.js`'s `pageAuthGuard`), every API route re-checks it
-  (`middleware/auth.js`), and the frontend redirects to `/login.html` if a
-  logged-out user's session expires mid-visit.
-- Each user's sheets and records are private to their account (enforced at
-  the database query level, not just the UI).
-- File upload limits: 10 MB for images, 10 MB for Excel files (adjust in
-  `routes/scans.js` / `routes/templates.js` if needed). Uploaded files are
-  processed in memory and never written to disk — required for Vercel's
-  serverless functions, which don't offer persistent disk storage.
-- `NODE_ENV=production` marks the auth cookie `secure`, so it's only sent
-  over HTTPS — make sure it's set in your Vercel project's env vars.
+The app does not currently provide general rate limiting for OCR, uploads, record operations, or other APIs. It also has no explicit CSRF token mechanism, no token revocation list after logout, and limited server-side validation for registration fields. These are important considerations before exposing a production deployment to an untrusted or high-volume audience.
 
 ## Project structure
 
-```
-roll-register/
-  server.js                # Express app; exports the app for Vercel, listens locally
-  vercel.json               # Vercel build/routing config
-  lib/
-    firebaseAdmin.js        # Firestore connection (service account credentials)
-    quota.js                 # shared monthly Vision API cap (see above)
-  middleware/
-    auth.js                  # JWT cookie check
-  utils/
-    ocr.js                    # Google Vision API call
-    fieldMatcher.js            # ordered label matching (bbox-based lines, typo tolerance)
-    excel.js                   # read/write .xlsx files
-  routes/
-    auth.js, templates.js, scans.js, records.js
-  public/                   # frontend (static, no build step)
-    login.html, register.html, dashboard.html, scan.html, records.html
-    css/style.css
-    js/api.js, dashboard.js, scan.js, records.js
+```text
+student-ocr-app/
+|-- server.js                 Express app, middleware, routes, static files
+|-- api/index.js              Vercel entry point exporting the Express app
+|-- vercel.json               Vercel build and catch-all routing configuration
+|-- package.json              Runtime dependencies and npm scripts
+|-- .env.example              Environment variable template
+|-- lib/
+|   |-- firebaseAdmin.js       Firestore Admin SDK initialization
+|   `-- quota.js               Transactional shared OCR quota
+|-- middleware/
+|   `-- auth.js                JWT cookie authentication middleware
+|-- routes/
+|   |-- auth.js                Registration, login, logout, current user
+|   |-- templates.js           Excel templates and export
+|   |-- scans.js               OCR upload and usage endpoints
+|   `-- records.js             Saved record CRUD
+|-- utils/
+|   |-- ocr.js                 Google Vision request and word extraction
+|   |-- fieldMatcher.js        OCR line grouping and header mapping
+|   |-- excel.js               Workbook parsing and rebuilding
+|   |-- asyncHandler.js        Async wrapper, currently unused
+|   `-- usageLimiter.js        Legacy SQLite-era limiter, currently unused
+|-- db/
+|   |-- db.js                  Legacy SQLite-era database helper, unused
+|   `-- schema.sql              Legacy SQLite schema, unused by active routes
+|-- public/
+|   |-- login.html             Sign-in page
+|   |-- register.html          Registration page
+|   |-- dashboard.html         Template list and OCR usage
+|   |-- scan.html              Camera/upload OCR and review page
+|   |-- records.html           Record editing and export page
+|   |-- css/style.css          Shared styling
+|   `-- js/                    API, dashboard, scan, and records controllers
+`-- uploads/.gitkeep           Placeholder directory; runtime uploads stay in memory
 ```
 
-## Firestore data model
+## Local setup
 
-- `users/{id}` — `name`, `email`, `passwordHash`, `createdAt`
-- `templates/{id}` — one per uploaded Excel sheet: `userId`, `name`,
-  `originalFilename`, `sheetName`, `headers` (array), `existingRowsJson`
-  (JSON-encoded — Firestore doesn't support arrays-of-arrays), `createdAt`
-- `records/{id}` — one per saved/reviewed scan: `templateId`, `userId`,
-  `dataJson` (JSON-encoded), `createdAt`, `updatedAt`
-- `usage/{YYYY-MM}` — one doc per calendar month: `count` (the shared Vision
-  API call counter described above)
+### Prerequisites
+
+- Node.js 18 or newer.
+- A Firebase project with Firestore enabled in Native mode.
+- A Firebase service account with `project_id`, `client_email`, and `private_key`.
+- A Google Cloud project with the Cloud Vision API enabled and an API key.
+
+### Configure and run
+
+From the project directory:
+
+```bash
+npm install
+copy .env.example .env
+npm start
+```
+
+On macOS or Linux, use `cp .env.example .env` instead of `copy`.
+
+Set these values in `.env`:
+
+| Variable | Required | Description |
+| --- | --- | --- |
+| `JWT_SECRET` | Yes | Long random value used to sign sessions. |
+| `GOOGLE_VISION_API_KEY` | Yes | Server-side Google Cloud Vision API key. |
+| `FIREBASE_PROJECT_ID` | Yes | Firebase project ID. |
+| `FIREBASE_CLIENT_EMAIL` | Yes | Service account client email. |
+| `FIREBASE_PRIVATE_KEY` | Yes | Service account private key; keep `\\n` escapes in dotenv values. |
+| `MONTHLY_OCR_LIMIT` | No | Shared monthly Vision-call cap; defaults to `500`. |
+| `PORT` | No | Local port; defaults to `3000`. |
+| `NODE_ENV` | No | Set to `production` for secure production cookies. |
+
+Generate a JWT secret with:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+```
+
+Open `http://localhost:3000` after the server starts. The root route redirects to `dashboard.html`; unauthenticated visitors are redirected by the page guard to `login.html`.
+
+For development with Node's file watcher:
+
+```bash
+npm run dev
+```
+
+## Vercel deployment
+
+The included `vercel.json` builds `server.js` with `@vercel/node`, sends all requests to that Express app, and includes `public/**` in the deployment.
+
+1. Import the repository into Vercel or run `vercel` from the project directory.
+2. Add `JWT_SECRET`, `GOOGLE_VISION_API_KEY`, `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, and `FIREBASE_PRIVATE_KEY` as Vercel environment variables.
+3. Optionally configure `MONTHLY_OCR_LIMIT`; set `NODE_ENV=production`.
+4. Redeploy after changing environment variables.
+
+Paste `FIREBASE_PRIVATE_KEY` with its `\\n` escapes intact. Firestore is used instead of a local database because serverless instances do not provide durable local storage. Vercel's HTTPS deployment also satisfies the secure-context requirement for camera capture.
+
+## Known limitations and legacy files
+
+- Only the first worksheet is imported.
+- Exports rebuild a workbook and do not preserve original formatting, formulas, widths, additional worksheets, or workbook metadata.
+- OCR mapping depends on recognizable header labels and the expected label/value layout.
+- OCR quota reservations are not refunded when Vision fails.
+- The current monthly limit parser should be given a valid positive number.
+- `db/db.js`, `db/schema.sql`, and `utils/usageLimiter.js` describe an older SQLite design and are not imported by the active Firestore routes. SQLite is not listed as an installed dependency.
+- `utils/asyncHandler.js` is present but the active route handlers use explicit `try/catch` blocks instead.
+- The `uploads/` directory is retained only as a placeholder; runtime upload data is never stored there.
+
+The authoritative behavior is defined by `server.js`, the route modules, and the utility implementations. Keep this README synchronized when endpoint names, environment variables, or persistence behavior change.

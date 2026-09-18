@@ -30,9 +30,19 @@ router.get('/usage', async (req, res, next) => {
   }
 });
 
-router.post('/extract', upload.single('image'), async (req, res, next) => {
+router.post(
+  '/extract',
+  upload.fields([
+    { name: 'images', maxCount: 10 },
+    { name: 'image', maxCount: 1 },
+  ]),
+  async (req, res, next) => {
   try {
-    if (!req.file) return res.status(400).json({ error: 'No image uploaded.' });
+    const files = [
+      ...((req.files && req.files.images) || []),
+      ...((req.files && req.files.image) || []),
+    ];
+    if (!files.length) return res.status(400).json({ error: 'No image uploaded.' });
 
     const { templateId } = req.body || {};
     if (!templateId) return res.status(400).json({ error: 'templateId is required.' });
@@ -42,29 +52,44 @@ router.post('/extract', upload.single('image'), async (req, res, next) => {
       return res.status(404).json({ error: 'Sheet not found.' });
     }
 
-    // Reserve one unit of the shared monthly Vision API quota BEFORE calling
-    // the API. See lib/quota.js for why this has to happen first rather than
-    // after a successful call.
-    let usage;
     try {
-      usage = await reserveOcrCall();
-    } catch (err) {
-      if (err.code === 'QUOTA_EXCEEDED') return res.status(429).json({ error: err.message });
-      throw err;
-    }
+      const allWords = [];
+      const rawTexts = [];
+      let usage;
+      let yOffset = 0;
 
-    try {
-      const base64 = req.file.buffer.toString('base64');
-      const { rawText, words } = await extractTextFromImage(base64, process.env.GOOGLE_VISION_API_KEY);
+      for (const file of files) {
+        // Reserve quota immediately before each Vision request so a batch
+        // cannot call the API without accounting for every page.
+        try {
+          usage = await reserveOcrCall();
+        } catch (err) {
+          if (err.code === 'QUOTA_EXCEEDED') return res.status(429).json({ error: err.message });
+          throw err;
+        }
+
+        const base64 = file.buffer.toString('base64');
+        const { rawText, words } = await extractTextFromImage(base64, process.env.GOOGLE_VISION_API_KEY);
+        rawTexts.push(rawText);
+        words.forEach((word) => allWords.push({
+          ...word,
+          y0: word.y0 + yOffset,
+          y1: word.y1 + yOffset,
+        }));
+        const pageBottom = words.reduce((max, word) => Math.max(max, word.y1), 0);
+        yOffset += pageBottom + 100;
+      }
+
       const headers = templateDoc.data().headers;
-      const { mapped, lines } = mapWordsToHeaders(words, headers);
-      res.json({ rawText, lines, mapped, usage: { count: usage.count, limit: usage.limit } });
+      const { mapped, lines } = mapWordsToHeaders(allWords, headers);
+      res.json({ rawText: rawTexts.join('\n'), lines, mapped, usage: { count: usage.count, limit: usage.limit } });
     } catch (err) {
       res.status(502).json({ error: err.message || 'Text extraction failed.' });
     }
   } catch (err) {
     next(err);
   }
-});
+  }
+);
 
 module.exports = router;

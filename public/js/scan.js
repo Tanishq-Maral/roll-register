@@ -1,10 +1,11 @@
 let templateId = null;
 let headers = [];
 let focusedInput = null;
-let selectedBlob = null;
+let selectedBlobs = [];
 let savedCount = 0;
 let cameraStream = null;
 let lastSource = null; // 'camera' | 'upload'
+let draggedPreviewIndex = null;
 
 (async function init() {
   const user = await requireAuthOrRedirect();
@@ -34,22 +35,23 @@ let lastSource = null; // 'camera' | 'upload'
   const imageInput = document.getElementById('image-input');
   const extractBtn = document.getElementById('extract-btn');
   const previewWrap = document.getElementById('preview-wrap');
-  const previewImg = document.getElementById('preview-img');
 
   imageInput.addEventListener('change', async () => {
     document.getElementById('extract-error').textContent = '';
     if (!imageInput.files.length) {
-      hideExtractBtn();
       return;
     }
     try {
-      selectedBlob = await resizeImage(imageInput.files[0], 1800, 0.85);
+      const newBlobs = await Promise.all(
+        [...imageInput.files].map((file) => resizeImage(file, 1800, 0.85))
+      );
+      selectedBlobs.push(...newBlobs);
       lastSource = 'upload';
-      previewImg.src = URL.createObjectURL(selectedBlob);
-      previewWrap.style.display = 'block';
-      showExtractBtn();
+      renderPreviews();
     } catch (err) {
       showToast('Could not read that image.', true);
+    } finally {
+      imageInput.value = '';
     }
   });
 
@@ -73,15 +75,92 @@ function hideExtractBtn() {
   extractBtn.disabled = true;
 }
 
+function renderPreviews() {
+  const previewWrap = document.getElementById('preview-wrap');
+  const previewGrid = document.getElementById('preview-grid');
+  previewGrid.innerHTML = '';
+  selectedBlobs.forEach((blob, index) => {
+    const card = document.createElement('div');
+    card.className = 'preview-card';
+    card.draggable = true;
+    card.dataset.index = index;
+
+    const img = document.createElement('img');
+    img.src = URL.createObjectURL(blob);
+    img.alt = `Selected form page ${index + 1}`;
+
+    const footer = document.createElement('div');
+    footer.className = 'preview-card-footer';
+
+    const position = document.createElement('span');
+    position.className = 'preview-position';
+    position.textContent = `Page ${index + 1}`;
+
+    const controls = document.createElement('div');
+    controls.className = 'preview-controls';
+    controls.appendChild(createPreviewButton('←', 'Move page earlier', () => movePreview(index, -1), index === 0));
+    controls.appendChild(createPreviewButton('→', 'Move page later', () => movePreview(index, 1), index === selectedBlobs.length - 1));
+    controls.appendChild(createPreviewButton('×', 'Remove this page', () => removePreview(index), false, true));
+
+    footer.append(position, controls);
+    card.append(img, footer);
+    card.addEventListener('dragstart', () => {
+      draggedPreviewIndex = index;
+      card.classList.add('dragging');
+    });
+    card.addEventListener('dragend', () => {
+      draggedPreviewIndex = null;
+      card.classList.remove('dragging');
+    });
+    card.addEventListener('dragover', (event) => event.preventDefault());
+    card.addEventListener('drop', (event) => {
+      event.preventDefault();
+      if (draggedPreviewIndex === null || draggedPreviewIndex === index) return;
+      const [blob] = selectedBlobs.splice(draggedPreviewIndex, 1);
+      selectedBlobs.splice(index, 0, blob);
+      renderPreviews();
+    });
+    previewGrid.appendChild(card);
+  });
+  previewWrap.style.display = selectedBlobs.length ? 'block' : 'none';
+  if (selectedBlobs.length) showExtractBtn();
+  else hideExtractBtn();
+}
+
+function createPreviewButton(label, title, onClick, disabled, danger = false) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'preview-control' + (danger ? ' preview-control-danger' : '');
+  button.textContent = label;
+  button.title = title;
+  button.setAttribute('aria-label', title);
+  button.disabled = disabled;
+  button.addEventListener('click', onClick);
+  return button;
+}
+
+function movePreview(index, direction) {
+  const targetIndex = index + direction;
+  if (targetIndex < 0 || targetIndex >= selectedBlobs.length) return;
+  [selectedBlobs[index], selectedBlobs[targetIndex]] = [selectedBlobs[targetIndex], selectedBlobs[index]];
+  renderPreviews();
+}
+
+function removePreview(index) {
+  selectedBlobs.splice(index, 1);
+  renderPreviews();
+}
+
 // Clears whichever photo (camera or uploaded) is currently selected, so the
 // user is back to choosing "Take photo" / "Upload photo" from scratch.
 function clearSelectedPhoto() {
   document.getElementById('preview-wrap').style.display = 'none';
-  document.getElementById('preview-img').src = '';
+  document.getElementById('preview-grid').innerHTML = '';
   document.getElementById('image-input').value = '';
   document.getElementById('extract-error').textContent = '';
   hideExtractBtn();
-  selectedBlob = null;
+  selectedBlobs = [];
+  draggedPreviewIndex = null;
   lastSource = null;
 }
 
@@ -121,8 +200,6 @@ function closeCamera() {
 async function capturePhoto() {
   const video = document.getElementById('camera-video');
   const canvas = document.getElementById('camera-canvas');
-  const previewWrap = document.getElementById('preview-wrap');
-  const previewImg = document.getElementById('preview-img');
 
   canvas.width = video.videoWidth;
   canvas.height = video.videoHeight;
@@ -135,11 +212,10 @@ async function capturePhoto() {
   closeCamera();
 
   try {
-    selectedBlob = await resizeImage(rawBlob, 1800, 0.85);
+    const blob = await resizeImage(rawBlob, 1800, 0.85);
+    selectedBlobs.push(blob);
     lastSource = 'camera';
-    previewImg.src = URL.createObjectURL(selectedBlob);
-    previewWrap.style.display = 'block';
-    showExtractBtn();
+    renderPreviews();
   } catch (err) {
     showToast('Could not process that photo. Please try again.', true);
   }
@@ -182,7 +258,9 @@ async function extractText() {
 
   try {
     const fd = new FormData();
-    fd.append('image', selectedBlob, 'form.jpg');
+    selectedBlobs.forEach((blob, index) => {
+      fd.append('images', blob, `form-${index + 1}.jpg`);
+    });
     fd.append('templateId', templateId);
     const { rawText, lines, mapped } = await apiFetch('/api/scans/extract', { method: 'POST', body: fd });
     renderReview(lines, mapped, rawText);
@@ -282,11 +360,12 @@ async function saveRecord() {
 function resetForNextScan() {
   document.getElementById('review-area').style.display = 'none';
   document.getElementById('preview-wrap').style.display = 'none';
-  document.getElementById('preview-img').src = '';
+  document.getElementById('preview-grid').innerHTML = '';
   document.getElementById('image-input').value = '';
   hideExtractBtn();
   closeCamera();
-  selectedBlob = null;
+  selectedBlobs = [];
+  draggedPreviewIndex = null;
   lastSource = null;
   focusedInput = null;
 }
